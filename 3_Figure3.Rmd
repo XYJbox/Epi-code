@@ -1,0 +1,454 @@
+---
+title: "Figure 3"
+author: "000"
+date: "0000-00-00"
+output: pdf_document
+---
+# dimplot and density
+```{r cars}
+library(Seurat)
+library(SeuratData)
+library(patchwork)
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(clusterProfiler)
+library('org.Hs.eg.db')
+library(biomaRt)
+seurat_Ast<-readRDS("seurat_Ast.RDS")
+p1<-DimPlot(seurat_Ast,reduction = "umap",group.by = "celltype",cols=colorset,label= F,pt.size = 0.7)
+p1
+ggsave("Ast_umap.pdf",p1,width=4,height = 3)
+
+library(Nebulosa)
+p<-plot_density(seurat,c("C3","GFAP"),joint = T)
+p
+p<-plot_density(seurat,c("SLC1A2","TRPM3"),joint = T)
+p
+
+library(dplyr)
+table(seurat_Ast$celltype)
+cluster_sub<-subset(seurat_Ast,celltype=="Ast_ac")
+markers <- FindMarkers(cluster_sub,
+                         ident.1 = "Epilepsy",
+                         ident.2 = "Control",
+                         group.by = "maingroup",
+                         min.pct = 0.25,
+                         logfc.threshold = 0.25,
+                         test.use = "MAST")
+  markers$gene <- rownames(markers)
+  markers[markers$gene == "GFAP", ] 
+  markers[markers$gene == "C3", ] 
+
+top_upregulated <- markers %>%
+  filter(avg_log2FC > 0 & p_val_adj < 0.05) %>%
+  arrange(desc(avg_log2FC)) %>%
+  head(20)
+
+top_downregulated <- markers %>%
+  filter(avg_log2FC < 0 & p_val_adj < 0.05) %>%
+  arrange(avg_log2FC) %>%
+  head(20)
+top_upregulated$gene
+top_downregulated$gene
+  for (i in genes) { 
+  gene<-i
+  print(markers[markers$gene == i, ])
+  }
+
+write.csv(markers,"Ast_ac_markers.csv")
+
+scedata<-seurat_Ast
+table(scedata$maingroup)
+table(scedata$celltype)
+intercept=3215/(3215+3936)
+Idents(scedata)<-scedata$celltype
+library(tidyverse)
+library(reshape)
+clusdata <- as.data.frame(table(Idents(scedata), scedata$maingroup))
+clusdata1 <- clusdata %>% pivot_wider(names_from = Var2,
+                                      values_from =Freq )
+clusdata1 <- as.data.frame(clusdata1)
+rownames(clusdata1) <- clusdata1$Var1
+clusdata2 <- clusdata1[,-1]
+clus2 <- clusdata2
+clus2$ID <- rownames(clus2)
+clus3  <- melt(clus2, id.vars = c("ID")) 
+
+p<-ggplot(data = clus3,
+            aes(x=ID,y=value,fill=variable))+
+  #geom_bar(stat = "identity",position = "stack")+    
+  geom_bar(stat = "identity",position = "fill")+     
+  geom_text(aes(label = value),size=3, position = position_fill(vjust = 0.5), color="black")+
+  scale_y_continuous(expand = expansion(mult=c(0.01,0.1)),
+                     labels = scales::percent_format())+
+  scale_fill_manual(values = c("Control"="#8198D1","Epilepsy"="#FB8072"),      
+                    limits=c("Control","Epilepsy"))+                         
+  theme(panel.background = element_blank(),          
+        axis.line = element_line(),                   
+        legend.position = "top")+                
+  #labs(title = "Microglia",x=NULL,y=NULL,size=3.5)+         
+  coord_flip() +
+  guides(fill=guide_legend(title = NULL,nrow = 1,byrow = FALSE))+
+  geom_hline(yintercept = intercept, linetype = "dashed", color = "red")+
+  annotate("text", x = 6.7, y = 0.51, label = "44.96%", color = "red",size=3.5)
+p
+ggsave("ast_bar.pdf",p,height =3,width = 5)
+
+# Binomial test
+table(seurat_Ast$celltype)
+control_counts <- c(1610, 821, 678, 332, 215, 280)
+epilepsy_counts <- c(1195, 729, 301, 380, 467, 143)
+cell_types <- c("Ast_0","Ast_1","Ast_2","Ast_3","Ast_ac","Ast_5")
+
+#new_data.frame
+results <- data.frame(Cell_Type = character(),
+                      Control_Count = integer(),
+                      Epilepsy_Count = integer(),
+                      P_Value = numeric(),
+                      Significance = character(),
+                      stringsAsFactors = FALSE)
+
+#total_counts
+total_cells_control <- sum(control_counts)
+total_cells_epilepsy <- sum(epilepsy_counts)
+
+#expected_ratio
+expected_ratio <- 0.4496 # total_cells_epilepsy / (total_cells_epilepsy + total_cells_control)
+
+# Binomial test
+for (i in 1:length(control_counts)) {
+  total_count <- control_counts[i] + epilepsy_counts[i]
+  test_result <- binom.test(x = epilepsy_counts[i], 
+                            n = total_count, 
+                            p = expected_ratio, 
+                            alternative = "two.sided")
+  
+  # significance
+  if (test_result$p.value < 0.001) {
+    significance <- "***"
+  } else if (test_result$p.value < 0.01) {
+    significance <- "**"
+  } else if (test_result$p.value < 0.05) {
+    significance <- "*"
+  } else {
+    significance <- "ns"
+  }
+  
+  # results
+  results <- rbind(results, data.frame(Cell_Type = cell_types[i],
+                                       Control_Count = control_counts[i],
+                                       Epilepsy_Count = epilepsy_counts[i],
+                                       P_Value = test_result$p.value,
+                                       Significance = significance))
+}
+print(results)
+#markers and GO 
+Idents(seurat_Ast)<-seurat_Ast$celltype
+scedata <- seurat_Ast
+Idents(scedata)<-scedata$celltype
+
+markers <- FindAllMarkers(object = scedata, 
+                                only.pos = TRUE, 
+                                logfc.threshold = 0.25,
+                                min.pct = 0.25, 
+                                test.use = "MAST"
+                               ) 
+markers_sig<-markers[markers$cluster=="Ast_ac",]
+markers_sig<-markers_sig[markers_sig$p_val_adj<0.05,]
+markers_sig<-markers_sig[order(markers_sig$cluster,-markers_sig$avg_log2FC),]
+top200 <- markers_sig %>% top_n(200, avg_log2FC)
+df_sig <- top200
+group <- data.frame(gene=df_sig$gene,
+                    group=df_sig$cluster)
+ 
+Gene_ID <- bitr(df_sig$gene, fromType="SYMBOL", 
+            toType="ENTREZID", 
+            OrgDb="org.Hs.eg.db")
+
+data  <- merge(Gene_ID,group,by.x='SYMBOL',by.y='gene')
+
+data_GO <- compareCluster(
+  ENTREZID~group, 
+  data=data, 
+  fun="enrichGO", 
+  OrgDb="org.Hs.eg.db",
+  ont = "BP",
+  pAdjustMethod = "BH",
+  pvalueCutoff = 0.05,
+  qvalueCutoff = 0.05
+)
+ 
+data_GO_sim <- simplify(data_GO, 
+                        cutoff=0.7, 
+                        by="p.adjust", 
+                        select_fun=min)
+ 
+write.csv(data_GO_sim,"Ast_GO.csv")
+
+
+#Ast_ac_Volcano
+library(dplyr)
+library(EnhancedVolcano)
+table(seurat_Ast$celltype)
+cluster_sub<-subset(seurat_Ast,celltype=="Ast_ac")
+
+markers <- FindMarkers(cluster_sub,
+                         ident.1 = "Epilepsy",
+                         ident.2 = "Control",
+                         group.by = "maingroup",
+                         min.pct = 0.25,
+                         logfc.threshold = 0.25,
+                         test.use = "MAST")
+  markers$gene <- rownames(markers)
+  markers <- markers %>% filter(!grepl("^MT-", gene) & !grepl("\\.", gene))
+pe<-EnhancedVolcano(markers,
+                lab = rownames(markers),
+                x = 'avg_log2FC',
+                y = 'p_val_adj',
+                xlab = bquote(~Log[2]~ 'fold change'),
+                pCutoff = 0.05,
+                FCcutoff = 0.5,
+                pointSize = 3,
+                labSize = 4.0,
+                labCol = 'black',  
+                labFace = 'bold',
+                boxedLabels = TRUE,
+                parseLabels = TRUE,
+                colAlpha = 4/5,
+                cutoffLineType = 'twodash',
+                cutoffLineWidth = 0.8,
+                legendPosition = 'top',
+                legendLabSize = 10,
+                legendIconSize = 3.0,
+                drawConnectors = TRUE,
+                widthConnectors = 1.0,
+                colConnectors = 'black',
+                title = 'DEGs of Ast_ac')+ coord_flip()
+pe
+ggsave("ast_ac_volcano.pdf",pe,height =7,width = 9)
+
+genes<-c("CD44")
+for (i in genes) {
+gene<-i
+group_var <- "maingroup"
+data <- FetchData(cluster_sub, vars = c(gene, group_var))
+colnames(data) <- c("expression", "group")
+p1<-ggplot(data, aes(x = group, y = expression, color = group)) +
+  geom_violin(
+    scale = "width",
+    size = 1.5,              
+    fill = NA              
+  ) +
+  geom_boxplot(
+    width = 0.05,            
+    size = 1.5,               
+    fill = NA,            
+    outlier.shape = NA     
+  ) +
+  scale_color_manual(
+    values = c("#332288","#CC3311") 
+  ) +
+  theme_minimal() +                 
+  labs(
+    x = "",                            
+    y = "Expression",                  
+    title = paste(gene,"in Ast_ac")
+  ) +
+  theme(
+    axis.text = element_text(size = 12), 
+    axis.title = element_text(size = 14),
+    legend.position = "none",
+    #panel.border = element_rect(color = "black", fill = NA, size = 1.5)
+     axis.line = element_line(color = "black", size = 1)  
+  )
+p1
+ggsave(filename=paste(gene,"in Ast_ac.pdf"),p1,width = 4,height = 3)
+}
+
+#cellchat
+seurat_chat<-merge(seurat_Ast,seurat_Mic)
+seurat_chat<-JoinLayers(seurat_chat)
+table(seurat_chat$celltype)
+
+## cellchat_control
+library(CellChat)
+library(tidyverse)
+library(future)
+library(reticulate)
+library(tidyr)
+Idents(seurat_chat)<-seurat_chat$celltype
+seurat_1<-seurat_chat
+seurat_1<-JoinLayers(seurat_1)
+table(seurat_1$celltype,seurat_1$maingroup)
+saveRDS(seurat_1,"cellchat_data1.rds")
+#1、NL--cellchat.control
+NL <- seurat_1[,seurat_1$maingroup=="Control"]
+NL <- CreateSeuratObject(counts = NL@assays$RNA$counts, assay = "RNA",meta.data = NL@meta.data,project = "cellchat")
+NL <- NormalizeData(NL) 
+NL <- FindVariableFeatures(NL)
+NL <- ScaleData(NL)
+
+data.input = NL@assays$RNA$data
+meta = NL@meta.data
+cellchat.NL <- createCellChat(object = data.input, meta = meta, group.by = "celltype")
+cellchat.NL <- setIdent(cellchat.NL, ident.use = "celltype") 
+groupSize <- as.numeric(table(cellchat.NL@idents))
+
+#data base
+CellChatDB <- CellChatDB.human
+CellChatDB.use <- CellChatDB
+cellchat.NL@DB <- CellChatDB.use
+cellchat.control <- cellchat.NL
+cellchat.control <- subsetData(cellchat.control) 
+
+cellchat.control <- identifyOverExpressedGenes(cellchat.control)
+cellchat.control <- identifyOverExpressedInteractions(cellchat.control)
+
+#2--network
+cellchat.control <- computeCommunProb(cellchat.control, raw.use = TRUE, population.size = TRUE)
+cellchat.control <- filterCommunication(cellchat.control, min.cells = 10)
+df.net <- subsetCommunication(cellchat.control)
+write.csv(df.net, "control_cellchat_all.csv")
+#cell-cell communication
+cellchat.control <- computeCommunProbPathway(cellchat.control)
+cellchat.control <- aggregateNet(cellchat.control)
+str(cellchat.control@net)
+#visual
+groupSize <- as.numeric(table(cellchat.control@idents))
+par(mfrow = c(1,2), xpd=TRUE)
+netVisual_circle(cellchat.control@net$count, vertex.weight = groupSize,
+                 weight.scale = T, label.edge= F, title.name = "Number of interactions")
+netVisual_circle(cellchat.control@net$weight, vertex.weight = groupSize,
+                 weight.scale = T, label.edge= F, title.name = "Interaction weights/strength")
+saveRDS(cellchat.control, file = "cellchat_control.rds")
+
+##cellchat_case
+#2、CA--cellchat.case
+CA <- seurat_1[,seurat_1$maingroup=="Epilepsy"]
+CA <- CreateSeuratObject(counts = CA@assays$RNA$counts, assay = "RNA",meta.data = CA@meta.data,project = "cellchat")
+CA <- NormalizeData(CA) 
+CA <- FindVariableFeatures(CA)
+CA <- ScaleData(CA)
+
+data.input = CA@assays$RNA$data
+meta = CA@meta.data
+cellchat.CA <- createCellChat(object = data.input, meta = meta, group.by = "celltype")
+cellchat.CA <- setIdent(cellchat.CA, ident.use = "celltype") 
+groupSize <- as.numeric(table(cellchat.CA@idents))
+
+#data base
+CellChatDB <- CellChatDB.human
+CellChatDB.use <- CellChatDB
+cellchat.CA@DB <- CellChatDB.use
+cellchat.case <- cellchat.CA
+cellchat.case <- subsetData(cellchat.case) 
+cellchat.case <- identifyOverExpressedGenes(cellchat.case)
+cellchat.case <- identifyOverExpressedInteractions(cellchat.case)
+
+#2--network
+cellchat.case <- computeCommunProb(cellchat.case, raw.use = TRUE, population.size = TRUE)
+cellchat.case <- filterCommunication(cellchat.case, min.cells = 10)
+df.net <- subsetCommunication(cellchat.case)
+write.csv(df.net, "case_cell-cell.all.csv")
+#cell-cell communication
+cellchat.case <- computeCommunProbPathway(cellchat.case)
+cellchat.case <- aggregateNet(cellchat.case)
+str(cellchat.case@net)
+#visual
+groupSize <- as.numeric(table(cellchat.case@idents))
+par(mfrow = c(1,2), xpd=TRUE)
+netVisual_circle(cellchat.case@net$count, vertex.weight = groupSize,
+                 weight.scale = T, label.edge= F, title.name = "Number of interactions")
+netVisual_circle(cellchat.case@net$weight, vertex.weight = groupSize,
+                 weight.scale = T, label.edge= F, title.name = "Interaction weights/strength")
+saveRDS(cellchat.case, file = "cellchat_case.rds")
+
+##cellchat_vs
+
+#3、merge 
+cellchat.control <-readRDS("cellchat_control.rds")
+cellchat.case <-readRDS("cellchat_case.rds")
+
+object.list <- list(control = cellchat.control,case = cellchat.case)
+cellchat <- mergeCellChat(object.list, add.names = names(object.list))
+cellchat
+
+#histogram
+gg1 <- compareInteractions(cellchat, show.legend = F, group = c(1,2))
+gg2 <- compareInteractions(cellchat, show.legend = F, group = c(1,2), measure = "weight")
+gg1 + gg2
+
+#ball plot
+par(mfrow = c(1,2), xpd=TRUE)
+netVisual_diffInteraction(cellchat, weight.scale = T)
+netVisual_diffInteraction(cellchat, weight.scale = T, measure = "weight")
+#heatmap--differential
+gg1 <- netVisual_heatmap(cellchat)
+gg2 <- netVisual_heatmap(cellchat, measure = "weight")
+gg1 + gg2
+#ball plot--number and interactions
+weight.max <- getMaxWeight(object.list, attribute = c("idents","count"))
+par(mfrow = c(1,2), xpd=TRUE)
+for (i in 1:length(object.list)) {
+  netVisual_circle(object.list[[i]]@net$count, weight.scale = T, label.edge= F, edge.weight.max = weight.max[2], edge.width.max = 12, title.name = paste0("Number of interactions - ", names(object.list)[i]))
+}
+object.list <- lapply(object.list, function(x) {mergeInteractions(x, group.cellType)})
+cellchat <- mergeCellChat(object.list, add.names = names(object.list))
+
+#coordinate graphs
+num.link <- sapply(object.list, function(x) {rowSums(x@net$count) + colSums(x@net$count)-diag(x@net$count)})
+weight.MinMax <- c(min(num.link), max(num.link)) # control the dot size in the different datasets
+gg <- list()
+for (i in 1:length(object.list)) {
+  gg[[i]] <- netAnalysis_signalingRole_scatter(object.list[[i]], title = names(object.list)[i], weight.MinMax = weight.MinMax)
+}
+patchwork::wrap_plots(plots = gg)
+
+#information plot
+gg1 <- rankNet(cellchat, comparison = c(2, 1),mode = "comparison",sources.use = c("Mic_ac"), targets.use = c("Ast_ac"),stacked = T, do.stat = TRUE,slot.name = "net",color.use=c("#CC3311","#332288"))
+
+gg2 <- rankNet(cellchat, mode = "comparison",sources.use = c("Mic_ac"), targets.use = c("Ast_ac"), stacked = F, do.stat = TRUE,slot.name = "net")
+gg1 + gg2
+
+ggsave("rankNet_data1.pdf",gg1,width=4,height=5)
+
+###bubble plot
+p1<-netVisual_bubble(cellchat, 
+                 sources.use = c("Mic_ac","Mic_1","Mic_2"), 
+                 targets.use = c("Ast_ac"),
+                 comparison = c(2, 1),
+                 sort.by.source=T,
+                 n.colors=20,
+                 color.text=c("#CC3311","#332288")
+                 )
+
+ggsave("bubble_data1.pdf",p1,width=4,height = 6)
+
+###heatmap--both case and control
+pathways.show <- c("SPP1_CD44")
+par(mfrow = c(1,2), xpd = TRUE)
+ht <- list()
+for (i in 1:length(object.list)) {
+  ht[[i]] <- netVisual_heatmap(object.list[[i]],
+                               signaling = pathways.show,
+                               color.heatmap = "Reds",
+                               slot.name = c("net"),
+                               title.name = paste(pathways.show, "signaling ",names(object.list)[i]))
+}
+ComplexHeatmap::draw(ht[[1]] + ht[[2]], ht_gap = unit(0.5, "cm"))
+
+###heatmap--only case 
+p<-netVisual_heatmap(object.list[[2]],
+                             signaling = pathways.show,
+                             color.heatmap = "Reds",
+                             slot.name = c("net"),
+                             title.name = paste(pathways.show, "signaling ",names(object.list)[2]))
+
+pdf("SPP1_heat_data1.pdf", width = 4, height = 3)
+p 
+dev.off()
+saveRDS(cellchat,"cellchat_data1.rds")
+```
+

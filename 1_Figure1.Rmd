@@ -1,0 +1,101 @@
+---
+title: "Figure 1"
+author: "0000"
+date: "0000-00-00"
+output: html_document
+
+---
+```{r}
+## input and environment
+library(Seurat)
+library(SeuratData)
+library(patchwork)
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(Nebulosa)
+library(scProportionTest)
+library(scDist)
+set.seed(1126490984)
+
+#umap
+seurat1<-readRDS("seurat.RDS")
+p<-DimPlot(seurat1, reduction = "umap", group.by = c("celltype"),cols = colorset,label = T,label.size = 4.5)
+p
+ggsave("data1_umap1.pdf",p,width=8,height = 7)
+
+## dot plot 
+list_genes=list(Astro=c("GFAP","FGFR3","GJA1","AQP4","ALDH1L1"),
+                Exci=c("SLC17A7","NRGN","SATB2","CAMK2A"),
+                Inhi=c("GAD1","GAD2","NXPH1"),
+                Micro=c("DOCK8","SFMBT2","P2RY12", "CX3CR1", "CSF1R"),
+                Macro=c("PLXDC2","CYBB","APBB1IP"),
+                OPC=c("SOX10","PCDH15","LHFPL3","VCAN","PDGFRA","CSPG4"),
+                Oligo=c("MOBP","PLP1","MBP"),
+                T=c("CD96","SKAP1","CD3G","CD3D"),
+                Endo=c("FLT1","VWF","PECAM1","CDH5")
+                )
+seurat1$celltype <- factor(seurat1$celltype,levels = c("Ast","Ex-neurons", "In-neurons","Micro", "Mac", "OPC","Oli","T Cells", "Endo"))
+p3<-DotPlot(seurat1,features = list_genes,group.by = "celltype",assay = "RNA",cols=c("lightyellow","red",scale=T))+RotatedAxis()
+p3
+ggsave("data1_dotplot.pdf",plot=p3,width=11,height =5)
+
+## density plot
+p<-plot_density(seurat1,reduction = 'umap', c("FGFR3","SLC17A7","GAD1","P2RY12","PCDH15","MOBP","CD96","VWF"),joint = F)
+p
+ggsave("data1_fea.pdf",plot=p,width=14,height =12)
+
+## bar plot
+scedata<-seurat1
+Idents(scedata)<-scedata$celltype
+Cellratio <- prop.table(table(Idents(scedata),scedata$maingroup),2)
+Cellratio <- as.data.frame(Cellratio)
+colourCount = length(unique(Cellratio$Var1))
+p<-ggplot(Cellratio) + 
+  geom_bar(aes(x =Var2, y= Freq, fill = Var1),
+           stat = "identity",width = 0.7,size = 0.5)+ 
+  theme_classic() +
+  labs(x='Sample',y = 'Ratio')+
+  #coord_flip()+ 
+  theme( panel.border = element_blank(),
+        axis.text.x = element_text(angle = 45, hjust = 1))+
+  scale_fill_manual(values = colorset)
+p
+ggsave("data1_barplot.pdf",p,width=3.5,height =8)
+
+## scProportionTest
+
+seurat_data<-subset(seurat1,celltype=="Ast"|celltype=="Ex-neurons"|celltype=="In-neurons"|celltype=="Micro"|celltype=="OPC"|celltype=="Oli"|celltype=="T Cells"|celltype=="Endo")
+prop_test <- sc_utils(seurat_data)
+
+prop_test <- permutation_test(
+	prop_test, cluster_identity = "celltype",
+	sample_1 = "Control", sample_2 = "Epilepsy",
+	sample_identity = "maingroup"
+)
+
+p<-permutation_plot(prop_test,order_clusters = T)
+p<-p+ggtitle("Control vs Epilepsy")+
+  ylab("Log2FD")+ 
+  xlab(" ")+
+  theme(plot.title = element_text(size = 10, face = "bold"),
+        axis.title.y = element_text(size = 6))
+p
+ggsave("ProportionTest_data1.pdf",p,width=7,height =4)
+
+## scDist
+seurat_data<-subset(seurat1,celltype=="Ast"|celltype=="Ex-neurons"|celltype=="In-neurons"|celltype=="Micro"|celltype=="OPC"|celltype=="Oli"|celltype=="T Cells"|celltype=="Endo")
+
+dat <- GetAssayData(seurat_data,layer = "data") 
+dim(dat)
+out <- scDist(dat,seurat_data@meta.data,
+              fixed.effects = "maingroup",
+              #random.effects="orig.ident",
+              clusters="celltype")
+ 
+out$results
+out_data<-out
+p<-DistPlot(out)
+p
+ggsave("scdist_data1.pdf",p,width =5 ,height =4 )
+

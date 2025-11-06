@@ -1,0 +1,284 @@
+---
+title: "Figure 2"
+author: "000"
+date: "0000-00-00"
+output: pdf_document
+---
+
+```{r cars}
+#BiocManager::install('org.Hs.eg.db')
+#remotes::install_github("YuLab-SMU/clusterProfiler")
+library(Seurat)
+library(SeuratData)
+library(patchwork)
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(clusterProfiler)
+library('org.Hs.eg.db')
+library(biomaRt)
+seurat_Mic<-readRDS("seurat_Mic.RDS")
+###dimplot
+p1<-DimPlot(seurat_Mic,reduction = "umap",group.by = "celltype",cols=colorset,label= F,pt.size = 0.7)
+p1
+ggsave("Mic_umap.pdf",p1,width=4,height = 3)
+
+###Density plot
+library(Nebulosa)
+p<-plot_density(seurat_Mic,c("AIF1","ITGAM"),joint = T)
+p
+ggsave("Mic_Iba1.pdf",p,width=10,height = 2)
+p2<-plot_density(seurat_Mic,c("IL1B","CCL3"),joint = T)
+p2
+ggsave("Mic_IL1B.pdf",p2,width=10,height = 2)
+
+###bar plot
+library(tidyverse)
+library(reshape)
+scedata<-seurat_Mic
+table(scedata$maingroup)
+intercept=2756/(2627+2756)
+clusdata <- as.data.frame(table(Idents(scedata), scedata$maingroup))
+clusdata1 <- clusdata %>% pivot_wider(names_from = Var2,
+                                      values_from =Freq )
+clusdata1 <- as.data.frame(clusdata1)
+rownames(clusdata1) <- clusdata1$Var1
+clusdata2 <- clusdata1[,-1]
+clus2 <- clusdata2
+clus2$ID <- rownames(clus2)
+clus3  <- melt(clus2, id.vars = c("ID")) 
+p<-ggplot(data = clus3,
+            aes(x=ID,y=value,fill=variable))+
+  #geom_bar(stat = "identity",position = "stack")+    
+  geom_bar(stat = "identity",position = "fill")+      
+  geom_text(aes(label = value),size=3, position = position_fill(vjust = 0.5), color="black")+
+  scale_y_continuous(expand = expansion(mult=c(0.01,0.1)),
+                     labels = scales::percent_format())+
+  scale_fill_manual(values = c("Control"="#8DD3C7","Epilepsy"="#FFA500"),      
+                    limits=c("Control","Epilepsy"))+   
+  theme(panel.background = element_blank(),         
+        axis.line = element_line(),                   
+        legend.position = "top")+          
+  coord_flip() +
+  guides(fill=guide_legend(title = NULL,nrow = 1,byrow = FALSE))+
+  geom_hline(yintercept = intercept, linetype = "dashed", color = "red")+
+  annotate("text", x = 3.55, y = 0.4900, label = "51.20%", color = "red",size=3.5)
+p
+ggsave("mic_bar.pdf",p,height =2,width = 5)
+
+###Binomial test
+table(scedata$celltype,scedata$maingroup)
+control_counts <- c(1292,715,620)
+epilepsy_counts <- c(1522,771,463)
+cell_types <- c("Mic_ac","Mic_re","Mic_in")
+
+#new_data.frame
+results <- data.frame(Cell_Type = character(),
+                      Control_Count = integer(),
+                      Epilepsy_Count = integer(),
+                      P_Value = numeric(),
+                      Significance = character(),
+                      stringsAsFactors = FALSE)
+
+#total_counts
+total_cells_control <- sum(control_counts)
+total_cells_epilepsy <- sum(epilepsy_counts)
+
+#expected_ratio
+expected_ratio <- 0.5120 # total_cells_epilepsy / (total_cells_epilepsy + total_cells_control)
+
+# Binomial test
+for (i in 1:length(control_counts)) {
+  total_count <- control_counts[i] + epilepsy_counts[i]
+  test_result <- binom.test(x = epilepsy_counts[i], 
+                            n = total_count, 
+                            p = expected_ratio, 
+                            alternative = "two.sided")
+  
+  # significance
+  if (test_result$p.value < 0.001) {
+    significance <- "***"
+  } else if (test_result$p.value < 0.01) {
+    significance <- "**"
+  } else if (test_result$p.value < 0.05) {
+    significance <- "*"
+  } else {
+    significance <- "ns"
+  }
+  
+  # results
+  results <- rbind(results, data.frame(Cell_Type = cell_types[i],
+                                       Control_Count = control_counts[i],
+                                       Epilepsy_Count = epilepsy_counts[i],
+                                       P_Value = test_result$p.value,
+                                       Significance = significance))
+}
+
+print(results)
+
+###markers 
+Idents(seurat_Mic)<-seurat_Mic$celltype
+markers <- FindAllMarkers(object = seurat_Mic, 
+                                only.pos = TRUE, 
+                                logfc.threshold = 0.25,
+                                min.pct = 0.25, 
+                                test.use = "MAST"
+                               ) 
+markers_sig<-markers[markers$p_val_adj<0.05,]
+markers<-markers_sig
+markers=markers[order(markers$cluster,-markers$avg_log2FC),]
+top200 <- markers %>% group_by(cluster) %>% top_n(200, avg_log2FC)
+
+###GO
+df_sig <- top200
+group <- data.frame(gene=df_sig$gene,
+                    group=df_sig$cluster)
+ 
+Gene_ID <- bitr(df_sig$gene, fromType="SYMBOL", 
+            toType="ENTREZID", 
+            OrgDb="org.Hs.eg.db")
+
+data  <- merge(Gene_ID,group,by.x='SYMBOL',by.y='gene')
+
+data_GO <- compareCluster(
+  ENTREZID~group, 
+  data=data, 
+  fun="enrichGO", 
+  OrgDb="org.Hs.eg.db",
+  ont = "BP",
+  pAdjustMethod = "BH",
+  pvalueCutoff = 0.05,
+  qvalueCutoff = 0.05,
+  readable = TRUE
+)
+data_GO_sim <- simplify(
+  data_GO, 
+  cutoff = 0.7, 
+  by = "p.adjust", 
+  select_fun = min
+)
+write.csv(data_GO_sim,"df_GO.csv")
+
+p<-dotplot(data_GO_sim, showCategory=10,font.size = 9)+
+  scale_fill_gradient(high ="#8DD3C7",low ="#FFCC33")
+p
+ggsave("markers_GO.pdf",p,height=10,width = 4.5)
+
+###Mic_ac_Volcano
+table(seurat_Mic$celltype)
+cluster_sub<-subset(seurat_Mic,celltype=="Mic_ac")
+markers <- FindMarkers(cluster_sub,
+                         ident.1 = "Epilepsy",
+                         ident.2 = "Control",
+                         group.by = "maingroup",
+                         min.pct = 0.25,
+                         logfc.threshold = 0.25,
+                         test.use = "MAST")
+  markers$gene <- rownames(markers)
+  markers <- markers %>% filter(!grepl("^MT-", gene) & !grepl("\\.", gene))
+library(dplyr)
+library(EnhancedVolcano)
+pe<-EnhancedVolcano(markers,
+                lab = rownames(markers),
+                x = 'avg_log2FC',
+                y = 'p_val_adj',
+                xlab = bquote(~Log[2]~ 'fold change'),
+                pCutoff = 0.05,
+                FCcutoff = 0.5,
+                pointSize = 2,
+                labSize = 4.0,
+                labCol = 'black',
+                labFace = 'bold',
+                boxedLabels = TRUE,
+                parseLabels = TRUE,
+                colAlpha = 4/5,
+                cutoffLineType = 'twodash',
+                cutoffLineWidth = 0.8,
+                legendPosition = 'top',
+                legendLabSize = 10,
+                legendIconSize = 3.0,
+                drawConnectors = TRUE,
+                widthConnectors = 1.0,
+                colConnectors = 'black',
+                title = 'DEGs of Mic_ac')+ coord_flip()
+pe
+ggsave("mic_ac_volcano.pdf",pe,height =8,width = 8)
+###Mic_in_Volcano
+cluster_sub<-subset(seurat_Mic,celltype=="Mic_in")
+markers <- FindMarkers(cluster_sub,
+                         ident.1 = "Epilepsy",
+                         ident.2 = "Control",
+                         group.by = "maingroup",
+                         min.pct = 0.25,
+                         logfc.threshold = 0.25,
+                         test.use = "MAST")
+  markers$gene <- rownames(markers)
+  markers <- markers %>% filter(!grepl("^MT-", gene) & !grepl("\\.", gene))
+pe<-EnhancedVolcano(markers,
+                lab = rownames(markers),
+                x = 'avg_log2FC',
+                y = 'p_val_adj',    
+                xlab = bquote(~Log[2]~ 'fold change'),
+                pCutoff = 0.05,
+                FCcutoff = 0.5,
+                pointSize = 2,
+                labSize = 4.0,
+                labCol = 'black',
+                labFace = 'bold',
+                boxedLabels = TRUE,
+                parseLabels = TRUE,
+                colAlpha = 4/5,
+                cutoffLineType = 'twodash',
+                cutoffLineWidth = 0.8,
+                legendPosition = 'top',
+                legendLabSize = 10,
+                legendIconSize = 3.0,
+                drawConnectors = TRUE,
+                widthConnectors = 1.0,
+                colConnectors = 'black',
+                title = 'DEGs of Mic_in')+ coord_flip()
+pe
+ggsave("mic_in_volcano.pdf",pe,height =6,width = 8)
+        
+###DEG_Vlolin_SPP1
+table(seurat_Mic$celltype)
+cluster_sub<-subset(seurat_Mic,celltype=="Mic_ac")
+genes<-c("SPP1")
+for (i in genes) {
+gene<-i
+group_var <- "maingroup"
+data <- FetchData(cluster_sub, vars = c(gene, group_var))
+colnames(data) <- c("expression", "group")
+p1<-ggplot(data, aes(x = group, y = expression, color = group)) +
+  geom_violin(
+    scale = "width",
+    size = 1.5,              
+    fill = NA               
+  ) +
+  geom_boxplot(
+    width = 0.05,            
+    size = 1.5,               
+    fill = NA,             
+    outlier.shape = NA      
+  ) +
+  scale_color_manual(
+    values = c("#332288","#CC3311")  
+  ) +
+  theme_minimal() +                 
+  labs(
+    x = "",                            
+    y = "Expression",                  
+    title = paste(gene,"in Mic_ac")
+  ) +
+  theme(
+    axis.text = element_text(size = 12), 
+    axis.title = element_text(size = 14),
+    legend.position = "none",
+    #panel.border = element_rect(color = "black", fill = NA, size = 1.5)
+     axis.line = element_line(color = "black", size = 1)  
+  )
+p1
+ggsave(filename=paste(gene,"in Mic_ac.pdf"),p1,width = 4,height = 3)
+}
+```

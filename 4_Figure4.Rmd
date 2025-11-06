@@ -1,0 +1,242 @@
+---
+title: "Figure 4"
+author: "000"
+date: "0000-00-00"
+output: pdf_document
+output: html_notebook
+---
+```{r echo=TRUE}
+rm(list=ls())
+library(Seurat)
+library(SCopeLoomR)
+library(AUCell)
+library(SCENIC)
+library(dplyr)
+library(KernSmooth)
+library(RColorBrewer)
+library(plotly)
+library(BiocParallel)
+library(grid)
+library(ComplexHeatmap)
+library(data.table)
+library(scRNAseq)
+library(patchwork)
+library(ggplot2) 
+library(stringr)
+library(circlize)
+library(qs)
+library(pheatmap)
+library(Hmisc)
+library(dplyr)
+library(scFunctions) 
+library(tidyr)
+
+### Step 1. out_SCENIC.loom 
+loom <- open_loom('out_SCENIC.loom') 
+regulons_incidMat <- get_regulons(loom, column.attr.name="Regulons")
+regulons_incidMat[1:4,1:4] 
+regulons <- regulonsToGeneLists(regulons_incidMat)
+regulonAUC <- get_regulons_AUC(loom,column.attr.name='RegulonsAUC')
+regulonAucThresholds <- get_regulon_thresholds(loom)
+tail(regulonAucThresholds[order(as.numeric(names(regulonAucThresholds)))])
+embeddings <- get_embeddings(loom)  
+close_loom(loom)
+rownames(regulonAUC)
+
+### Step 2.SeuratData
+seurat.data<-readRDS("seurat_Mic.RDS")
+Idents(seurat.data) <- seurat.data$celltype
+options(repr.plot.width = 6, repr.plot.height = 4.5)
+DimPlot(seurat.data, reduction = "umap",group.by="celltype",label=T,pt.size = 1) 
+# Cellgroup
+seurat.data@meta.data <- seurat.data@meta.data %>%
+  mutate(Cellgroup = paste(
+    case_when(
+      maingroup == "Control" ~ "CN",
+      maingroup == "Epilepsy" ~ "EP",
+      TRUE ~ maingroup
+    ),
+    celltype, sep = ":"
+  ))
+table(seurat.data@meta.data$Cellgroup)
+## senic-data
+sub_regulonAUC <- regulonAUC[,match(colnames(seurat.data),colnames(regulonAUC))]
+identical(colnames(sub_regulonAUC), colnames(seurat.data))
+dim(sub_regulonAUC)
+cellTypes <- data.frame(row.names = colnames(seurat.data), 
+                        Cellgroup = seurat.data$Cellgroup)
+head(cellTypes)
+sub_regulonAUC[1:4,1:4] 
+
+scenic_res = assay(sub_regulonAUC) %>% as.matrix()
+seurat.data[["scenic"]] <- SeuratObject::CreateAssayObject(counts = scenic_res)
+seurat.data <- SeuratObject::SetAssayData(seurat.data, layer = "scale.data",
+                                          new.data = scenic_res, assay = "scenic")
+
+## RSS Score-Rank plot
+rss <- calcRSS(AUC=getAUC(sub_regulonAUC), 
+               cellAnnotation=cellTypes[colnames(sub_regulonAUC), "Cellgroup"]) 
+rss=na.omit(rss)
+rssPlot <- plotRSS(rss)
+
+## RSS rank
+library(cowplot)
+rssRanklist<-list()
+y=1
+cellgroup <- c("CN:Mic_re","CN:Mic_in","CN:Mic_ac","EP:Mic_re","EP:Mic_in","EP:Mic_ac")
+TF_mtx<-read.csv("RSS_seleted_CSI.csv",header = T,row.names = 1)
+for(i in cellgroup) {
+  data_rank_plot <- as.data.frame(rss[,i])
+  data_rank_plot$TF<-rownames(data_rank_plot)
+  colnames(data_rank_plot)<-c("Cellgroup","TF")
+  # rank
+  data_rank_plot <- data_rank_plot[order(data_rank_plot[,1],decreasing=T),]
+  data_rank_plot$rank <- seq(1, nrow(data_rank_plot))
+  # label
+  mtx<-subset(TF_mtx,cellgroup==i)
+  uplist<- subset(mtx,avg_log2FC>0)$TFs
+  downlist<- subset(mtx,avg_log2FC<0)$TFs
+  p <- ggplot(data_rank_plot, aes(x=rank, y=Cellgroup)) + 
+    geom_point(size=3, shape=16, color="grey",alpha =0.4)+
+    geom_point(data = data_rank_plot[1:20,],
+               size=3, color=  "#F0B34D")+ 
+    geom_point(data = data_rank_plot[uplist,],
+               size=3, color= "#CC3311")+ 
+    geom_point(data = data_rank_plot[downlist,],
+               size=3, color= "#332288")+ 
+    theme_bw()+
+    theme(axis.title = element_text(colour = 'black', size = 12),
+          axis.text = element_text(colour = 'black', size = 10),
+          axis.text.x = element_blank(),
+          axis.ticks.x = element_blank())+
+    labs(x='rank', y='regulons specificity score',title=i)+
+    geom_text_repel(data = data_rank_plot[uplist,],
+                    aes(label = TF), color = "#CC3311", size = 3, fontface = "italic", 
+                    arrow = arrow(ends = "first", length = unit(0.01, "npc")), 
+                    box.padding = 0.2, point.padding = 0.3, segment.color = 'black', 
+                    segment.size = 0.3, force = 10, max.iter = 3e3, segment.alpha = 0.5, 
+                    max.overlaps = 50, nudge_x = 30) +  
+    geom_text_repel(data = data_rank_plot[downlist,],
+                    aes(label = TF), color = "#332288", size = 3, fontface = "italic", 
+                    arrow = arrow(ends = "first", length = unit(0.01, "npc")), 
+                    box.padding = 0.2, point.padding = 0.3, segment.color = 'black', 
+                    segment.size = 0.3, force = 6, max.iter = 3e3, segment.alpha = 0.5, 
+                    max.overlaps = 50, nudge_y = -0.04) 
+  rssRanklist[[y]] <- p
+  y=y+1
+}
+
+pdf("rank.pdf",height = 8,width = 10)
+plot_grid(rssRanklist[[1]],rssRanklist[[2]],rssRanklist[[3]],
+          rssRanklist[[4]],rssRanklist[[5]],rssRanklist[[6]],ncol = 3)
+dev.off()
+
+### Heatmap 
+
+TFnames<-read.csv("TFs_display.csv",header = T,row.names = 1)
+
+selectedResolution <- "Cellgroup" 
+cellsPerGroup <- split(rownames(cellTypes), 
+                       cellTypes[,selectedResolution])
+# extened regulons
+sub_regulonAUC <- sub_regulonAUC[onlyNonDuplicatedExtended(rownames(sub_regulonAUC)),] 
+dim(sub_regulonAUC)
+
+# Calculate average expression:
+regulonActivity_byGroup <- sapply(cellsPerGroup,
+                                  function(cells) 
+                                    rowMeans(getAUC(sub_regulonAUC)[,cells]))
+
+regulonActivity_byGroup_use <- regulonActivity_byGroup[TFnames$TFs,]
+col_order<-c("CN:Mic_re","CN:Mic_in","CN:Mic_ac","EP:Mic_re","EP:Mic_in","EP:Mic_ac")
+regulonActivity_byGroup_use <- regulonActivity_byGroup_use[,col_order]
+
+regulonActivity_byGroup_Scaled <- t(scale(t(regulonActivity_byGroup_use),
+                                          center = T, scale=T)) 
+dim(regulonActivity_byGroup_Scaled)
+regulonActivity_byGroup_Scaled=na.omit(regulonActivity_byGroup_Scaled)
+p<-Heatmap(
+  regulonActivity_byGroup_Scaled,
+  column_title = "RSS Score by Cellgroup",
+  name = "z-score",
+  col = colorRamp2(seq(from=-2,to=2,length=11),rev(brewer.pal(11, "Spectral"))),
+  show_row_names = T,
+  show_column_names = TRUE,
+  row_names_gp = gpar(fontsize = 10),
+  clustering_method_rows = "ward.D2",
+  clustering_method_columns = "ward.D2",
+  row_names_rot = 0,
+  cluster_rows = F,
+  cluster_row_slices = FALSE,
+  cluster_columns = FALSE,
+  #right_annotation = row_anno,
+  column_names_rot = 45)
+p
+
+pdf("82TFs_heatmap.pdf",height=12,width=5)
+p
+dev.off()
+
+###CSI matrix
+library(ComplexHeatmap)
+library(dendextend)
+# scFunctions:calculate_csi -- CSI matrix
+csi_matrix <- calculate_csi(regulonAUC) 
+csi_matrix_wide <- csi_matrix %>%
+  spread(key = regulon_2, value = CSI)
+dim(csi_matrix_wide)
+csi_matrix_final <- as.matrix(csi_matrix_wide[,-1])
+rownames(csi_matrix_final) <- csi_matrix_wide$regulon_1
+dim(csi_matrix_final)
+
+col_dend = as.dendrogram(hclust(dist(csi_matrix_final)))
+col_dend = color_branches(col_dend, k = 3) 
+#write.csv(csi_matrix_final,"csi_matrix.csv")
+Heatmap(csi_matrix_final, 
+        name = "CSI",  
+        column_title = "Regulon CSI Heatmap",
+        cluster_columns = col_dend,
+        col = colorRampPalette(c("#332288", "white", "#CC3311"))(50), 
+        show_column_names = FALSE,  
+        show_row_names = F, 
+        cluster_rows = TRUE,
+        #right_annotation = row_anno
+)
+
+###ARA umap
+
+col_dend = as.dendrogram(hclust(dist(csi_matrix_final)))
+col_dend = color_branches(col_dend, k = 3) 
+col_dend_cut <- cutree(col_dend, k = 3)
+group1_genes <- names(col_dend_cut[col_dend_cut == 1])
+group2_genes <- names(col_dend_cut[col_dend_cut == 2])
+group3_genes <- names(col_dend_cut[col_dend_cut == 3])
+
+expr_matrix <- GetAssayData(seurat.data,assay = "scenic") 
+regulon_expr_matrix <- NULL 
+regulon_expr_matrix <- expr_matrix[group1_genes, , drop = FALSE] 
+average_regulon_activity <- colMeans(regulon_expr_matrix) 
+seurat.data$M1 <- average_regulon_activity
+
+# ARA_umap
+umap_coords <- seurat.data[["umap"]]@cell.embeddings
+umap_data <- data.frame(UMAP1 = umap_coords[,1], 
+                        UMAP2 = umap_coords[,2], 
+                        average_regulon_activity = seurat.data$M1,
+                        maingroup = seurat.data$maingroup)
+p1<- ggplot(umap_data, aes(x = UMAP1, y = UMAP2, color = average_regulon_activity)) +
+  geom_point(size = 1) + 
+  scale_color_gradientn(colors = c("blue","green","yellow","orange", "red")) +  
+  theme_void() +  
+  theme(
+    #panel.border = element_rect(colour = "black", fill = NA, size = 1),  
+    legend.position = "right", 
+    legend.title = element_text(size = 12), 
+    legend.text = element_text(size = 10), 
+    plot.title = element_text(size = 12,hjust = 0.5)
+  ) + 
+  labs(title = "Average Regulon Activity of M1 ", 
+       color = "ARA")  
+  #facet_wrap(~maingroup)
+
+p1

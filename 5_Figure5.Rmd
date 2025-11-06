@@ -1,0 +1,267 @@
+---
+title: "Figure 5"
+author: "000"
+date: "0000-00-00"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(Seurat)
+library(SeuratData)
+library(patchwork)
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(clusterProfiler)
+library('org.Hs.eg.db')
+library(biomaRt)
+library(ggpubr)
+library(dittoSeq)
+library(viridis)
+library(monocle)
+library(cowplot)
+library(tidyverse)
+library(patchwork)
+library(ggridges)
+library(RColorBrewer)
+library(scales)
+
+###up and down DEGs
+seurat_Ast<-readRDS("seurat_Ast.RDS")
+markers <- FindMarkers(
+  object = subset(seurat_Ast, celltype=="Ast_ac"),
+  ident.1 = "Epilepsy",
+  ident.2 = "Control",
+  group.by = "maingroup",
+  min.pct = 0.25,
+  logfc.threshold = 0.25,
+  test.use = "MAST"
+) 
+down_markers<-markers%>%
+  tibble::rownames_to_column("gene") %>%
+  filter(
+    p_val_adj < 0.05, 
+    avg_log2FC < -0.5
+  )
+down_markers <- down_markers[order(down_markers$avg_log2FC), ]
+
+down_markers[down_markers$gene=="EAAT2",]
+
+up_markers<-markers%>%
+  tibble::rownames_to_column("gene") %>%
+  filter(
+    p_val_adj < 0.05, 
+    avg_log2FC > 0.5
+  )
+up_markers <- up_markers[order(up_markers$avg_log2FC, decreasing = TRUE), ]
+up_markers[up_markers$gene=="CD44",]
+###GO analysis
+gene_list<-down_markers$gene
+Gene_ID <- bitr(gene_list, 
+                fromType = "SYMBOL", 
+                toType = "ENTREZID", 
+                OrgDb = "org.Hs.eg.db")
+go_results <- compareCluster(
+  geneClusters = Gene_ID,
+  fun = "enrichGO",
+  OrgDb = "org.Hs.eg.db",
+  ont = "ALL",
+  pAdjustMethod = "BH",
+  pvalueCutoff = 0.05,
+  qvalueCutoff = 0.05
+)
+go_results_sim <- simplify(
+  go_results, 
+  cutoff = 0.7, 
+  by = "p.adjust", 
+  select_fun = min
+)
+go_data <- go_results_sim@compareClusterResult %>%
+  as.data.frame() %>%  
+  dplyr::arrange(p.adjust) %>%  
+  dplyr::slice(1:20)
+
+p<-ggplot(go_data, aes(x = Count, y = reorder(Description, Count), fill = p.adjust)) +
+  geom_col(width = 0.7) +  
+  scale_fill_gradient(low ="#FDB462", high ="#B2DF8A") +  
+  labs(x = "Gene Count",y='', title  = "GO Term", fill = "Adj. p-value") +
+  theme_classic(base_size = 10) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    axis.text.y = element_text(size = 10)
+  )
+p
+pdf("Ast_down.pdf",height=5,width=6)
+p
+dev.off()
+go_results_readable <- setReadable(go_results_sim, OrgDb = org.Hs.eg.db, keyType = "ENTREZID")
+write.csv(go_results_readable, "ast_down_GO.csv", row.names = FALSE)
+
+###monocle2
+
+seurat_Ast<-readRDS("seurat_Ast.RDS")
+DimPlot(seurat_Ast, reduction = "umap", label=T) 
+Idents(seurat_Ast)<-seurat_Ast$celltype
+table(seurat_Ast$celltype)
+seurat_Ast$sample_name<-NULL
+seurat_CN<-subset(seurat_Ast,maingroup=="Control")
+seurat_EP<-subset(seurat_Ast,maingroup=="Epilepsy")
+seurat_1<-seurat_EP
+
+expr_matrix = GetAssayData(seurat_1, layer = "counts")
+expr_matrix = as(expr_matrix,'sparseMatrix')
+
+p_data <- seurat_1@meta.data 
+f_data <- data.frame(gene_short_name = row.names(expr_matrix),
+                     row.names = row.names(expr_matrix))
+pd <- new('AnnotatedDataFrame', data = p_data) 
+fd <- new('AnnotatedDataFrame', data = f_data)
+
+cds <- newCellDataSet(expr_matrix, 
+                      phenoData = pd, 
+                      featureData = fd, 
+                      lowerDetectionLimit = 0,
+                      expressionFamily = negbinomial.size())
+
+cds <- estimateSizeFactors(cds)
+cds <- estimateDispersions(cds)
+
+cds <- detectGenes(cds, min_expr = 0.1)
+expressed_genes <- row.names(subset(fData(cds), 
+                                    num_cells_expressed >= 10))
+
+diff <- differentialGeneTest(cds[expressed_genes,],fullModelFormulaStr = "~celltype")
+
+deg <- subset(diff, qval < 0.01)
+deg <- deg[order(deg$qval, decreasing = F),]
+express_genes <- VariableFeatures(seurat_1) 
+cds <- setOrderingFilter(cds, express_genes) 
+plot_ordering_genes(cds)
+
+cds <- reduceDimension(cds, max_components = 2, method = 'DDRTree')
+cds <- orderCells(cds,root_state=1)
+### trajectory
+p1<-plot_cell_trajectory(cds,color_by="Pseudotime",
+                         size=3,show_backbone=TRUE)+
+  theme(text = element_text(size=12)
+        ,legend.position = "right")
+
+p2<-plot_cell_trajectory(cds,color_by="celltype",
+                         size=3,cell_name_size=3,
+                         show_backbone=TRUE)+
+  scale_color_manual(values=color_panel)+
+  guides(color=guide_legend(override.aes = list(size=3)))+
+  theme(text = element_text(size=12)
+        ,legend.position = "right")
+p3<-plot_cell_trajectory(cds,color_by="State",
+                         size=3,cell_number_sizw=3,
+                         show_backbone=TRUE)+
+  theme(text = element_text(size=12)
+        ,legend.position = "right")+
+  guides(color=guide_legend(override.aes = list(size=3)))
+
+df<-pData(cds)
+p4<-ggplot(df,aes(Pseudotime,colour=celltype))+
+  geom_density(bw=0.5,size=1,alpha=0.4)+
+  scale_color_manual(values=color_panel)+
+  theme(text = element_text(size=12),legend.position = "right")
+pall1 <- plot_grid(p1,p2,p3,p4,ncol = 2,labels = c("A","B","C","D"))
+
+###genes
+```{r}
+s.genes <- c("CD44","GFAP","GRM5","GRIN2A") 
+p<-plot_genes_in_pseudotime(cds[s.genes,], color_by = "celltype",ncol=4)+scale_color_manual(values=color_panel) 
+ggsave("genes.pdf",p,width = 12, height = 3)
+
+###pathways
+```{r}
+library(gridExtra)
+
+plot_pseudotime_pathway <- function(genelist, id, description, name) {
+  
+  genes <- unlist(strsplit(genelist, "/"))
+  
+  seurat_EP <- AddModuleScore(
+    object = seurat_EP,
+    features = list(temp = genes),
+    name = name
+  )
+  
+  score_column <- paste0(name, "1")
+  input.data[[name]] <- seurat_EP@meta.data[, score_column]
+
+  p <- ggplot(input.data, aes(x = Pseudotime, y = .data[[name]])) +
+    labs(
+      title = paste(id, ":", description),  
+      x = "Pseudotime", 
+      y = "Pathway activity"
+    ) +
+    ggpubr::stat_cor(
+      label.sep = "\n",
+      label.y = 0,
+      label.y.npc = "top",
+      size = 7,
+      method = "spearman"
+    ) +
+    geom_smooth(method = "loess", size = 0.8, color = "black") +
+    theme_bw() +
+    theme(
+      plot.title = element_text(size = 10, face = "bold"),  
+      legend.position = "none"
+    )
+  
+  return(p)
+}
+plot_list <- list()
+pathway_df <- read_csv("pathway.csv", col_types = cols(.default = "c"))
+
+for (i in 1:nrow(pathway_df)) {
+  # 
+  current_id <- pathway_df$ID[i]
+  current_desc <- pathway_df$Description[i]
+  current_genes <- pathway_df$geneID[i]
+  # 
+  safe_name <- paste0("Pathway_", current_id)
+  # 
+  p <- plot_pseudotime_pathway(
+    genelist = current_genes,
+    id = current_id,
+    description = current_desc,
+    name = safe_name
+  )
+  # 
+  output_file <- paste0("Pathway_",i, ".pdf")
+  ggsave(output_file,p,width = 5, height = 3)
+}
+
+plot_list <- list()
+
+plot_list[[1]]<-p
+for (i in 1:nrow(pathway_df)) {
+  current_id <- pathway_df$ID[i]
+  current_desc <- pathway_df$Description[i]
+  current_genes <- pathway_df$geneID[i]
+  
+  safe_name <- paste0("Pathway_", current_id)
+  
+  p <- plot_pseudotime_pathway(
+    genelist = current_genes,
+    id = current_id,
+    description = current_desc,
+    name = safe_name
+  )
+  
+  #
+  plot_list[[i]] <- p
+}
+
+# combined
+combined_plots <- marrangeGrob(grobs = plot_list,ncol = 4,nrow=2)
+ggsave(
+  filename = "combined_pathways.pdf",
+  plot = combined_plots,
+  width = 20,     
+  height = 8,    
+  limitsize = FALSE  
+)
+```

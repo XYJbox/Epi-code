@@ -1,0 +1,62 @@
+---
+title: "Sig_F1 "
+author: "0000"
+date: "0000-00-00"
+output: html_document
+---
+```{r}
+library(Seurat)
+library(SeuratData)
+library(patchwork)
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+seurat2<-readRDS("data2_seurat.rds")
+## umap plot (min.dist=0.4 )
+```{r}
+seurat2 <- RunUMAP(seurat2, dims = 1:20, reduction = "integrated.cca",min.dist = 0.4)
+p<-DimPlot(seurat2, reduction = "umap", group.by = c("celltype_new"),cols = colorset,label = T,label.size = 4.5,raster=FALSE)
+p
+ggsave("data2_umap.pdf",p,width=8,height = 7)
+
+## bar plot 
+
+scedata<-seurat2
+Idents(scedata)<-scedata$celltype_new
+Cellratio <- prop.table(table(Idents(scedata),scedata$maingroup),2)
+Cellratio <- as.data.frame(Cellratio)
+library(ggplot2)
+colourCount = length(unique(Cellratio$Var1))
+p<-ggplot(Cellratio) + 
+  geom_bar(aes(x =Var2, y= Freq, fill = Var1),
+           stat = "identity",width = 0.7,size = 0.5)+ 
+  theme_classic() +
+  labs(x='Sample',y = 'Ratio')+
+  #coord_flip()+
+  theme(
+        panel.border = element_blank(),
+        axis.text.x = element_text(angle = 45, hjust = 1))+
+  scale_fill_manual(values = colorset)
+p
+ggsave("data2_barplot.pdf",p,width=3.5,height =8)
+
+
+##dot plot 
+list_genes=c("GFAP","FGFR3","GJA1","AQP4","ALDH1L1",
+                "SLC17A7","NRGN","SATB2","CAMK2A",
+               "GAD1","GAD2","NXPH1",
+                "DOCK8","SFMBT2","P2RY12", "CX3CR1", "CSF1R",
+               "PCDH15","LHFPL3","VCAN","PDGFRA",
+               "MOBP","PLP1","MBP",
+               "FLT1","VWF","PECAM1")
+seurat2$celltype_new <- factor(seurat2$celltype_new,levels = c("Ast","Ex-neurons", "In-neurons","Micro", "OPC","Oli", "Endo"))
+p<-DotPlot(seurat2,features = list_genes,cols=c("lightyellow","red"),group.by = "celltype_new",scale=T,assay = "RNA")+RotatedAxis()
+p
+ggsave("data2-dotplot.pdf",plot=p,width=10,height =5)
+
+##density plot 
+p<-plot_density(seurat2,reduction = 'umap', c("FGFR3","SLC17A7","GAD1","P2RY12","PCDH15","MOBP","VWF"),joint = F)
+p
+ggsave("data2_fea.pdf",plot=p,width=14,height =12)
+getwd()
