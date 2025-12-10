@@ -1,0 +1,277 @@
+---
+title: "Untitled"
+author: "-"
+date: "2025-12-10"
+output: html_document
+---
+
+## 1. Run standard anlaysis workflow
+```{r pressure, echo=FALSE}
+seurat <- NormalizeData(seurat)
+seurat <- FindVariableFeatures(seurat)
+seurat <- ScaleData(seurat)
+seurat <- RunPCA(seurat)
+
+seurat <- FindNeighbors(seurat, dims = 1:20, reduction = "pca")
+seurat <- FindClusters(seurat, resolution = 1, cluster.name = "unintegrated_clusters")
+seurat <- RunUMAP(seurat, dims = 1:20, reduction = "pca", reduction.name = "umap.unintegrated")
+
+DimPlot(seurat, reduction = "umap.unintegrated", group.by = c("sample_name", "seurat_clusters"))
+
+seurat <- IntegrateLayers(object = seurat, method = CCAIntegration, orig.reduction = "pca", 
+                         new.reduction = "integrated.cca", verbose = FALSE)
+
+seurat[["RNA"]] <- JoinLayers(seurat[["RNA"]])
+
+```
+
+## 2. Cluster identification
+```{r pressure, echo=FALSE}
+seurat <- FindNeighbors(seurat, reduction = "integrated.cca", dims = 1:20)
+seurat <- FindClusters(seurat, resolution = 0.1)
+seurat <- RunUMAP(seurat, dims = 1:20, reduction = "integrated.cca", min.dist = 1, n.neighbors = 40)
+list_genes=list(Astro=c("GFAP","FGFR3","GJA1","AQP4","ALDH1L1"),
+                Exci=c("SLC17A7","NRGN","SATB2","CAMK2A"),
+                Inhi=c("GAD1","GAD2","NXPH1"),
+                Micro=c("DOCK8","SFMBT2","P2RY12", "CX3CR1", "CSF1R"),
+                Macro=c("PLXDC2","CYBB","APBB1IP"),
+                OPC=c("SOX10","PCDH15","LHFPL3","VCAN","PDGFRA","CSPG4"),
+                Oligo=c("MOBP","PLP1","MBP"),
+                T=c("CD96","SKAP1","CD3G","CD3D"),
+                Endo=c("FLT1","VWF","PECAM1","CDH5")
+                )
+
+DotPlot(seurat,features = list_genes,group.by = "seurat_clusters",assay = "RNA")+RotatedAxis()
+
+DotPlot(seurat,features = genes,group.by = "seurat_clusters")+RotatedAxis()
+FeaturePlot(seurat,features = genes,reduction = 'umap')
+cellname<-colnames(seurat[,seurat@meta.data$seurat_clusters %in% c(2,11)])
+seurat@meta.data$celltype[colnames(seurat) %in% cellname]<-"Astrocytes"
+DimPlot(seurat,reduction = 'umap',group.by = "celltype")
+
+```
+
+## 3. Cellchat
+```{r pressure, echo=FALSE}
+NL <- seurat_1[,seurat_1$maingroup=="Control"]
+NL <- CreateSeuratObject(counts = NL@assays$RNA$counts, assay = "RNA",meta.data = NL@meta.data,project = "cellchat")
+NL <- NormalizeData(NL)
+NL <- FindVariableFeatures(NL)
+NL <- ScaleData(NL)
+
+data.input = NL@assays$RNA$data
+meta = NL@meta.data
+cellchat.NL <- createCellChat(object = data.input, meta = meta, group.by = "label")
+cellchat.NL <- setIdent(cellchat.NL, ident.use = "label") 
+groupSize <- as.numeric(table(cellchat.NL@idents))
+
+CellChatDB <- CellChatDB.human
+CellChatDB.use <- CellChatDB
+cellchat.NL@DB <- CellChatDB.use
+cellchat.control <- cellchat.NL
+cellchat.control <- subsetData(cellchat.control) 
+cellchat.control <- identifyOverExpressedGenes(cellchat.control)
+cellchat.control <- identifyOverExpressedInteractions(cellchat.control)
+
+cellchat.control <- computeCommunProb(cellchat.control, raw.use = TRUE, population.size = TRUE)
+cellchat.control <- filterCommunication(cellchat.control, min.cells = 10)
+
+CA <- seurat_1[,seurat_1$maingroup=="Epilepsy"]
+CA <- CreateSeuratObject(counts = CA@assays$RNA$counts, assay = "RNA",meta.data = CA@meta.data,project = "cellchat")
+CA <- NormalizeData(CA)
+CA <- FindVariableFeatures(CA)
+CA <- ScaleData(CA)
+
+data.input = CA@assays$RNA$data
+meta = CA@meta.data
+cellchat.CA <- createCellChat(object = data.input, meta = meta, group.by = "label")
+cellchat.CA <- setIdent(cellchat.CA, ident.use = "label") 
+groupSize <- as.numeric(table(cellchat.CA@idents))
+
+CellChatDB <- CellChatDB.human
+CellChatDB.use <- CellChatDB
+cellchat.CA@DB <- CellChatDB.use
+cellchat.case <- cellchat.CA
+cellchat.case <- subsetData(cellchat.case)
+cellchat.case <- identifyOverExpressedGenes(cellchat.case)
+cellchat.case <- identifyOverExpressedInteractions(cellchat.case)
+
+cellchat.case <- computeCommunProb(cellchat.case, raw.use = TRUE, population.size = TRUE)
+cellchat.case <- filterCommunication(cellchat.case, min.cells = 10)
+
+```
+
+## 4. Pseudotime
+```{r pressure, echo=FALSE}
+
+p_data <- seurat@meta.data 
+f_data <- data.frame(gene_short_name = row.names(expr_matrix),
+                     row.names = row.names(expr_matrix))
+pd <- new('AnnotatedDataFrame', data = p_data) 
+fd <- new('AnnotatedDataFrame', data = f_data)
+
+cds <- newCellDataSet(expr_matrix, 
+                      phenoData = pd, 
+                      featureData = fd, 
+                      lowerDetectionLimit = 0,
+                      expressionFamily = negbinomial.size())
+
+cds <- estimateSizeFactors(cds)
+cds <- estimateDispersions(cds)
+
+cds <- detectGenes(cds, min_expr = 0.1)
+expressed_genes <- row.names(subset(fData(cds), 
+                                    num_cells_expressed >= 10))
+
+diff <- differentialGeneTest(cds[expressed_genes,],fullModelFormulaStr = "~celltype")
+
+deg <- subset(diff, qval < 0.01)
+deg <- deg[order(deg$qval, decreasing = F),]
+
+express_genes <- VariableFeatures(seurat) 
+cds <- setOrderingFilter(cds, express_genes) 
+plot_ordering_genes(cds)
+
+cds <- reduceDimension(cds, max_components = 2, method = 'DDRTree')
+cds <- orderCells(cds,root_state=1)
+```
+
+## 5. DEG
+```{r pressure, echo=FALSE}
+markers <- FindMarkers(Micro,
+                       ident.1 = "Epilepsy",
+                       ident.2 = "Control",
+                       group.by = "maingroup",
+                       min.pct = 0.25,
+                       features = common_genes,
+                       logfc.threshold = 0.25,
+                       test.use = "MAST")
+markers$gene <- rownames(markers)
+markers <- markers %>% filter(!grepl("^MT-", gene) & !grepl("\\.", gene))
+```
+
+
+## 6. GO
+```{r pressure, echo=FALSE}
+gene_list<-down_markers$gene
+Gene_ID <- bitr(gene_list, 
+                fromType = "SYMBOL", 
+                toType = "ENTREZID", 
+                OrgDb = "org.Hs.eg.db")
+go_results <- compareCluster(
+  geneClusters = Gene_ID,
+  fun = "enrichGO",
+  OrgDb = "org.Hs.eg.db",
+  ont = "ALL",
+  pAdjustMethod = "BH",
+  pvalueCutoff = 0.05,
+  qvalueCutoff = 0.05
+)
+go_results_sim <- simplify(
+  go_results, 
+  cutoff = 0.7, 
+  by = "p.adjust", 
+  select_fun = min
+)
+go_data <- go_results_sim@compareClusterResult %>%
+  as.data.frame() %>%  
+  dplyr::arrange(p.adjust) %>%  
+  dplyr::slice(1:20)
+
+p<-ggplot(go_data, aes(x = Count, y = reorder(Description, Count), fill = p.adjust)) +
+  geom_col(width = 0.7)+
+  labs(x = "Gene Count",y='', title  = "GO Term", fill = "Adj. p-value") +
+  theme_classic(base_size = 10) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    axis.text.y = element_text(size = 10)
+  )
+p
+```
+
+## 7. scDist
+```{r pressure, echo=FALSE}
+dat <- GetAssayData(seurat_data,layer = "data") 
+dim(dat)
+out <- scDist(dat,seurat_data@meta.data,
+              fixed.effects = "maingroup",
+              #random.effects="orig.ident",
+              clusters="celltype")
+ 
+out$results
+out_data<-out
+```
+
+## 8. scProportionTest
+```{r pressure, echo=FALSE}
+prop_test <- sc_utils(seurat_data)
+
+prop_test <- permutation_test(
+	prop_test, cluster_identity = "celltype",
+	sample_1 = "Control", sample_2 = "Epilepsy",
+	sample_identity = "maingroup"
+)
+```
+
+## 9. scProportionTest
+```{r pressure, echo=FALSE}
+prop_test <- sc_utils(seurat_data)
+
+prop_test <- permutation_test(
+	prop_test, cluster_identity = "celltype",
+	sample_1 = "Control", sample_2 = "Epilepsy",
+	sample_identity = "maingroup"
+)
+```
+
+## 10. KEGG
+```{r pressure, echo=FALSE}
+data_KEGG <- compareCluster(
+  ENTREZID~group, 
+  data=data, 
+  fun="enrichKEGG", 
+  pAdjustMethod = "BH",
+  pvalueCutoff = 0.05,
+  qvalueCutoff = 0.05
+)
+```
+
+## 11.pysenic
+```{r pressure, echo=FALSE}
+loom <- open_loom('out_SCENIC.loom') 
+regulons_incidMat <- get_regulons(loom, column.attr.name="Regulons")
+regulons_incidMat[1:4,1:4] 
+regulons <- regulonsToGeneLists(regulons_incidMat)
+regulonAUC <- get_regulons_AUC(loom,column.attr.name='RegulonsAUC')
+regulonAucThresholds <- get_regulon_thresholds(loom)
+tail(regulonAucThresholds[order(as.numeric(names(regulonAucThresholds)))])
+embeddings <- get_embeddings(loom)  
+close_loom(loom)
+rownames(regulonAUC)
+
+seurat.data@meta.data <- seurat.data@meta.data %>%
+  mutate(Cellgroup = paste(
+    case_when(
+      maingroup == "Control" ~ "CN",
+      maingroup == "Epilepsy" ~ "EP",
+      TRUE ~ maingroup
+    ),
+    celltype, sep = ":"
+  ))
+table(seurat.data@meta.data$Cellgroup)
+
+sub_regulonAUC <- regulonAUC[,match(colnames(seurat.data),colnames(regulonAUC))]
+
+identical(colnames(sub_regulonAUC), colnames(seurat.data))
+dim(sub_regulonAUC)
+cellTypes <- data.frame(row.names = colnames(seurat.data), 
+                        Cellgroup = seurat.data$Cellgroup)
+head(cellTypes)
+sub_regulonAUC[1:4,1:4] 
+
+scenic_res = assay(sub_regulonAUC) %>% as.matrix()
+seurat.data[["scenic"]] <- SeuratObject::CreateAssayObject(counts = scenic_res)
+seurat.data <- SeuratObject::SetAssayData(seurat.data, layer = "scale.data",
+                                          new.data = scenic_res, assay = "scenic")
+```
+
