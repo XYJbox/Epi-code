@@ -9,7 +9,6 @@ clusterProfiler: v4.12.6
 ggplot2: v3.5.1
 scProportionTest: (GitHub)
 scDist: (GitHub)
-MAST: (via Seurat)
 CellChat: v1.6.1
 pySCENIC: v0.12.1
 Monocle: v2.26.0
