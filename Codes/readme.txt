@@ -14,4 +14,6 @@ CellChat: v1.6.1
 pySCENIC: v0.12.1
 Monocle: v2.26.0
 
-Note: The code consists of two parts: R code and Python code, both of which need to be executed actively. The processed data used in the analysis is located in the Data/ directory, where you can directly load the Seurat objects by reading "data1_seurat.rds" and "data2_seurat.rds". The R code should be run first to process the data, followed by the Python code for SCENIC analysis. 
+Note: The code consists of two parts: R code and Python code, both of which need to be executed actively. The processed data used 
+in the analysis is located in the Data/ directory, where you can directly load the Seurat objects by reading "data1_seurat.rds" and
+"data2_seurat.rds". The R code should be run first to process the data, followed by the Python code for SCENIC analysis. 
